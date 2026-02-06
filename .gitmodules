@@ -1,0 +1,3 @@
+[submodule "reference/c-flat"]
+	path = reference/c-flat
+	url = https://github.com/control-flow-attestation/c-flat
