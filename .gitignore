@@ -1,0 +1,28 @@
+# Build directories
+build/
+CMakeFiles/
+CMakeCache.txt
+*.cmake
+
+# LLVM artifacts
+*.so
+*.o
+*.ll
+
+# TEE / TA artifacts
+*.ta
+*.elf
+*.map
+*.dmp
+*.stripped.elf
+
+# Application binaries
+*_app
+
+# Reference code (Skip as discussed)
+reference/
+
+# OS/Editor specific
+.DS_Store
+*.backup
+*~

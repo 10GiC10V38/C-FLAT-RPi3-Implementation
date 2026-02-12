@@ -1,0 +1,57 @@
+╔════════════════════════════════════════════════════════════════╗
+║              C-FLAT Deployment Instructions                    ║
+╔════════════════════════════════════════════════════════════════╝
+
+1. Copy files to Raspberry Pi 3:
+   ─────────────────────────────────────────────────────────────
+   On your development machine:
+   
+   $ scp outputs/*.ta root@<RPI_IP>:/tmp/
+   $ scp outputs/*_app root@<RPI_IP>:/root/
+
+2. Install Trusted Application:
+   ─────────────────────────────────────────────────────────────
+   On the Raspberry Pi (via SSH):
+   
+   $ sudo mkdir -p /lib/optee_armtz/
+   $ sudo cp /tmp/*.ta /lib/optee_armtz/
+   $ sudo chmod 444 /lib/optee_armtz/*.ta
+   $ ls -l /lib/optee_armtz/
+
+3. Run test applications:
+   ─────────────────────────────────────────────────────────────
+   $ cd /root
+   $ chmod +x test_simple_app
+   $ ./test_simple_app
+   
+   Expected output:
+   [CFLAT] Initialized
+   === C-FLAT Simple Test ===
+   Result: 15
+   === C-FLAT Attestation (XX bytes) ===
+   Final Hash: <32-byte hex>
+   ...
+
+4. Run loop test:
+   ─────────────────────────────────────────────────────────────
+   $ ./test_loop_app
+   
+   Expected output should include loop iteration counts.
+
+5. Troubleshooting:
+   ─────────────────────────────────────────────────────────────
+   If you get "failed to initialize context":
+   - Check if tee-supplicant is running: ps aux | grep tee-supplicant
+   - Start if needed: tee-supplicant -d
+   
+   If you get "failed to open session":
+   - Verify TA is in /lib/optee_armtz/
+   - Check TA permissions: ls -l /lib/optee_armtz/*.ta
+   - Check dmesg for OP-TEE errors: dmesg | grep -i optee
+
+6. Verify instrumentation:
+   ─────────────────────────────────────────────────────────────
+   Look at the .ll files to see inserted calls:
+   $ grep "__cflat" test-applications/simple/*.ll
+
+╚════════════════════════════════════════════════════════════════╝
