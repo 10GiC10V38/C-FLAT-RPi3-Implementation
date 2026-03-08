@@ -1,8 +1,10 @@
-# C-FLAT Results: Embench-IoT Benchmarks & Syringe Pump
+# C-FLAT Results: Cubic, N-body & Syringe Pump
 
-This document records the measured world-switch counts from running the C-FLAT
-instrumented binaries on **Raspberry Pi 3B** (AArch64, OP-TEE TrustZone), and
-compares them with the expected values from the **BLAST paper (CCS 2023), Table 2**.
+This document records results from running C-FLAT instrumented binaries on
+**Raspberry Pi 3B** (AArch64, OP-TEE TrustZone).
+
+**Benchmarks tested on RPi3**: `cubic`, `nbody` (Embench-IoT), and the syringe pump case study.
+All 15 Embench-IoT benchmarks were built and instrumented; only these two were executed.
 
 ---
 
@@ -23,64 +25,41 @@ Normal World → Secure World transition. The pass inserts:
 
 ---
 
-## Embench-IoT: Static Instrumentation Counts
+## Embench-IoT: Tested Benchmarks
 
-Counts from `build/*_pass.log` — these are the hooks inserted per benchmark:
+Only **cubic** and **nbody** were run on RPi3. The remaining benchmarks were
+built and instrumented (pass logs exist in `build/*_pass.log`) but not executed.
 
-| Benchmark | Branches | Calls | Returns | **Total hooks** |
-|-----------|----------|-------|---------|-----------------|
-| aha-mont64 | 22 | 22 | 10 | **54** |
-| crc32 | 24 | 10 | 15 | **49** |
-| cubic | 29 | 11 | 7 | **47** |
-| edn | 60 | 14 | 14 | **88** |
-| huffbench | 120 | 14 | 16 | **150** |
-| matmult-int | 32 | 11 | 11 | **54** |
-| minver | 94 | 10 | 9 | **113** |
-| nbody | 46 | 8 | 8 | **62** |
-| nettle-aes | 98 | 16 | 15 | **129** |
-| nettle-sha256 | 101 | 13 | 12 | **126** |
-| primecount | 24 | 7 | 7 | **38** |
-| sglib-combined | 854 | 78 | 94 | **1026** |
-| st | 23 | 18 | 13 | **54** |
-| tarfind | 47 | 11 | 14 | **72** |
-| ud | 54 | 7 | 7 | **68** |
+### Static instrumentation counts (from pass logs)
 
-> **Note**: Static counts are per-benchmark-function instrumentation.
-> Dynamic world-switch counts depend on how many times each hook fires at runtime
-> (loop iterations × static count within the loop body).
+| Benchmark | Branches | Calls | Returns | **Total static hooks** |
+|-----------|----------|-------|---------|------------------------|
+| **cubic** | 29 | 11 | 7 | **47** |
+| **nbody** | 46 | 8 | 8 | **62** |
 
----
+**cubic** function breakdown:
+- `SolveCubic`: 3 branches, 0 calls, 1 return
+- `benchmark_body`: 20 branches, 5 calls, 1 return
+- `verify_benchmark`: 6 branches, 0 calls, 1 return
+- `embench_main`: 0 branches, 4 calls, 1 return
 
-## Comparison with BLAST Paper (Table 2)
+**nbody** function breakdown:
+- `offset_momentum`: 8 branches, 0 calls, 1 return
+- `bodies_energy`: 12 branches, 0 calls, 1 return
+- `benchmark_body`: 8 branches, 2 calls, 1 return
+- `verify_benchmark`: 18 branches, 0 calls, 1 return
+- `embench_main`: 0 branches, 4 calls, 1 return
 
-The BLAST paper measures world-switch overhead for C-FLAT on the same
-Embench-IoT suite. Their metric is **domain switches per benchmark execution**.
+### RPi3 runtime results
 
-The **static hook count** (from pass logs) is the number of unique instrumented
-points in the code. The **dynamic world-switch count** is the actual runtime
-count — static × number of times each hook fires (loop iterations matter heavily).
+| Benchmark | Static hooks | Dynamic world switches | Screenshots |
+|-----------|-------------|----------------------|-------------|
+| cubic | 47 | see screenshot | `screenshots/cflat_cubic.png` · `screenshots/cubic_after_correction.png` |
+| nbody | 62 | see screenshot | `screenshots/cflat_nbody.png` · `screenshots/nbody_after_correction.png` |
 
-| Benchmark | Static hooks | BLAST Table 2 | Our dynamic count | Screenshots |
-|-----------|-------------|---------------|-------------------|-------------|
-| aha-mont64 | 54 | — | — | — |
-| crc32 | 49 | — | — | — |
-| cubic | 47 | — | — | `screenshots/cflat_cubic.png` |
-| edn | 88 | — | — | — |
-| huffbench | 150 | — | — | — |
-| matmult-int | 54 | — | — | — |
-| minver | 113 | — | — | — |
-| nbody | 62 | — | — | `screenshots/cflat_nbody.png` |
-| nettle-aes | 129 | — | — | — |
-| nettle-sha256 | 126 | — | — | — |
-| primecount | 38 | — | — | — |
-| sglib-combined | 1026 | — | — | — |
-| st | 54 | — | — | — |
-| tarfind | 72 | — | — | — |
-| ud | 68 | — | — | — |
-
-> **TODO**: Fill `Our dynamic count` column with `World Switches:` value printed
-> by each benchmark after running on RPi3. The BLAST paper values are from their
-> Table 2 column "C-FLAT domain switches".
+> The `_after_correction` screenshots show clean runs after the loop-handling
+> bugs (nested loop exit detection, loop record reuse) were fixed.
+> See [OBSERVATIONS.md](OBSERVATIONS.md) for full details of those fixes.
 
 ---
 
