@@ -102,8 +102,7 @@ Each distinct command sequence produces a unique, deterministic Final Hash:
 
 Screenshots are stored in:
 - `test-applications/embench-iot-benchmarks/screenshots/` — cubic, nbody results
-- GitHub issue attachments — syringe pump attestation output
-
+  
 ### Cubic benchmark
 `screenshots/cflat_cubic.png` — raw output
 `screenshots/cubic_after_correction.png` — after bug fixes
