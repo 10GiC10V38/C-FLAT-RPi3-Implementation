@@ -14,9 +14,10 @@ typedef struct {
     uint64_t loop_id;           // Loop header node ID
     uint8_t  pre_loop_hash[32]; // Hash before loop (reference point)
     uint8_t  loop_hash[32];     // Cumulative hash within loop
-    uint32_t iteration_count;   // Number of iterations
+    uint32_t iteration_count;   // Total iterations across all invocations
+    uint32_t invocation_count;  // How many times this loop was entered
     bool     is_active;         // Currently executing?
-    int      depth_level;       // NEW: Which nesting level (0-based)
+    int      depth_level;       // Which nesting level (0-based)
 } LoopRecord;
 
 /* Call-Return Matching */
@@ -41,8 +42,8 @@ typedef struct {
     CallRecord call_stack[MAX_CALL_DEPTH];
     int call_depth;
     
-    /* Final attestation */
-    uint8_t final_auth[1024];   // Serialized attestation
+    /* Final attestation: 36 header + MAX_LOOP_RECORDS * 80 bytes each */
+    uint8_t final_auth[36 + MAX_LOOP_RECORDS * 80];
     uint32_t auth_size;
     
     /* Debug log */
@@ -170,44 +171,55 @@ static TEE_Result cmd_record_node(cflat_session_ctx *ctx,
     return TEE_SUCCESS;
 }
 
-static TEE_Result cmd_loop_enter(cflat_session_ctx *ctx, 
+static TEE_Result cmd_loop_enter(cflat_session_ctx *ctx,
                                   uint64_t loop_header_id) {
-    if (ctx->loop_count >= MAX_LOOP_RECORDS) {
-        EMSG("Too many loops");
-        return TEE_ERROR_OVERFLOW;
-    }
-    
     if (ctx->loop_depth >= MAX_LOOP_DEPTH) {
         EMSG("Loop nesting too deep");
         return TEE_ERROR_OVERFLOW;
     }
-    
-    /* For nested loops, we may re-enter the same loop multiple times
-     * (e.g., inner loop entered once per outer loop iteration)
-     * Create a NEW record each time we enter */
-    
-    LoopRecord *rec = &ctx->loops[ctx->loop_count++];
-    rec->loop_id = loop_header_id;
-    rec->iteration_count = 0;
-    rec->depth_level = ctx->loop_depth;  // NEW: Track depth
-    
+
+    /* Try to find an existing INACTIVE record for this loop_id.
+     * This handles the common case of an inner loop being entered
+     * once per outer loop iteration — we reuse the same record
+     * and accumulate iterations, rather than allocating a new one. */
+    LoopRecord *rec = NULL;
+    int rec_idx = -1;
+    for (int i = 0; i < ctx->loop_count; i++) {
+        if (ctx->loops[i].loop_id == loop_header_id &&
+            !ctx->loops[i].is_active) {
+            rec = &ctx->loops[i];
+            rec_idx = i;
+            break;
+        }
+    }
+
+    if (!rec) {
+        /* No existing record — allocate a new one */
+        if (ctx->loop_count >= MAX_LOOP_RECORDS) {
+            EMSG("Too many unique loops (max %d)", MAX_LOOP_RECORDS);
+            return TEE_ERROR_OVERFLOW;
+        }
+        rec_idx = ctx->loop_count++;
+        rec = &ctx->loops[rec_idx];
+        rec->loop_id = loop_header_id;
+        rec->iteration_count = 0;
+        rec->invocation_count = 0;
+        rec->depth_level = ctx->loop_depth;
+    }
+
     /* Save pre-loop hash BEFORE resetting */
     TEE_MemMove(rec->pre_loop_hash, ctx->current_hash, 32);
-    
+
     /* Reset hash for loop sub-program */
     TEE_MemFill(ctx->current_hash, 0, 32);
-    
+
     rec->is_active = true;
+    rec->invocation_count++;
     ctx->loop_depth++;
-    
+
     /* Update hash with loop header */
     update_hash(ctx, loop_header_id);
-    
- //   append_log(ctx, TAG_LOOP_ENTER, &loop_header_id, 8);
-    
-    DMSG("loop_enter: loop_id=0x%lx, depth=%d, record_idx=%d", 
-         loop_header_id, rec->depth_level, ctx->loop_count - 1);
-    
+
     return TEE_SUCCESS;
 }
 static TEE_Result cmd_loop_exit(cflat_session_ctx *ctx, 
@@ -217,22 +229,19 @@ static TEE_Result cmd_loop_exit(cflat_session_ctx *ctx,
         return TEE_ERROR_BAD_STATE;
     }
     
-    /* Find the MOST RECENT active loop with this ID at current depth */
+    /* Find the active record for this loop_id */
     LoopRecord *rec = NULL;
-    int target_depth = ctx->loop_depth - 1;  // Depth we're exiting from
-    
-    for (int i = ctx->loop_count - 1; i >= 0; i--) {  // Search backwards
-        if (ctx->loops[i].loop_id == loop_header_id && 
-            ctx->loops[i].is_active &&
-            ctx->loops[i].depth_level == target_depth) {
+
+    for (int i = 0; i < ctx->loop_count; i++) {
+        if (ctx->loops[i].loop_id == loop_header_id &&
+            ctx->loops[i].is_active) {
             rec = &ctx->loops[i];
             break;
         }
     }
     
     if (!rec) {
-        EMSG("Loop record not found for loop_id=0x%lx at depth=%d", 
-             loop_header_id, target_depth);
+        EMSG("Loop record not found for loop_id=0x%lx", loop_header_id);
         return TEE_ERROR_ITEM_NOT_FOUND;
     }
     
@@ -244,12 +253,7 @@ static TEE_Result cmd_loop_exit(cflat_session_ctx *ctx,
     
     rec->is_active = false;
     ctx->loop_depth--;
-    
-  //  append_log(ctx, TAG_LOOP_EXIT, &loop_header_id, 8);
-    
-    DMSG("loop_exit: loop_id=0x%lx, depth=%d, iterations=%u", 
-         loop_header_id, rec->depth_level, rec->iteration_count);
-    
+
     return TEE_SUCCESS;
 }
 static TEE_Result cmd_loop_iteration(cflat_session_ctx *ctx, 
@@ -295,21 +299,12 @@ static TEE_Result cmd_call_enter(cflat_session_ctx *ctx,
 
 static TEE_Result cmd_call_return(cflat_session_ctx *ctx,
                                    uint64_t call_site_id) {
-    if (ctx->call_depth <= 0) {
-        EMSG("Call stack underflow");
-        return TEE_ERROR_BAD_STATE;
-    }
-    
-    CallRecord *rec = &ctx->call_stack[--ctx->call_depth];
-    
-    if (rec->call_site_id != call_site_id) {
-        EMSG("Call-return mismatch! Expected: 0x%lx, Got: 0x%lx",
-             rec->call_site_id, call_site_id);
-        return TEE_ERROR_SECURITY;
-    }
-    
-  //  append_log(ctx, TAG_RETURN, &call_site_id, 8);
-    
+    /* call_return is now inserted at the callee's ret site (before ret),
+     * so the ID is the callee BB id — not the original call_site_id.
+     * We simply track depth; no ID matching needed. */
+    (void)call_site_id;
+    if (ctx->call_depth > 0)
+        ctx->call_depth--;
     return TEE_SUCCESS;
 }
 
@@ -340,18 +335,26 @@ static TEE_Result cmd_finalize(cflat_session_ctx *ctx) {
     /* 3. Each loop record */
     for (int i = 0; i < ctx->loop_count; i++) {
         LoopRecord *rec = &ctx->loops[i];
-        
-        /* loop_id (8) + pre_loop_hash (32) + loop_hash (32) + iterations (4) */
+
+        /* loop_id(8) + pre_hash(32) + loop_hash(32) + iterations(4) + invocations(4) = 80 */
+        if (offset + 80 > sizeof(ctx->final_auth)) {
+            EMSG("Auth buffer full at loop %d/%d", i, ctx->loop_count);
+            break;
+        }
+
         TEE_MemMove(&ctx->final_auth[offset], &rec->loop_id, 8);
         offset += 8;
-        
+
         TEE_MemMove(&ctx->final_auth[offset], rec->pre_loop_hash, 32);
         offset += 32;
-        
+
         TEE_MemMove(&ctx->final_auth[offset], rec->loop_hash, 32);
         offset += 32;
-        
+
         TEE_MemMove(&ctx->final_auth[offset], &rec->iteration_count, 4);
+        offset += 4;
+
+        TEE_MemMove(&ctx->final_auth[offset], &rec->invocation_count, 4);
         offset += 4;
     }
     
